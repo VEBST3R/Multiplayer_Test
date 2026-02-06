@@ -56,5 +56,5 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "Test_BAZU.sln"
+    "dotnet.defaultSolution": "Test_BAZU.slnx"
 }

@@ -1,97 +1,107 @@
 using UnityEngine;
 using Unity.Netcode;
+
 [RequireComponent(typeof(CharacterController))]
 [RequireComponent(typeof(PlayerInput))]
 public class PlayerMovement : NetworkBehaviour
 {
+    [Header("Movement Settings")]
     public float moveSpeed = 5f;
     public float rotationSpeed = 10f;
-    public float interpolationSpeed = 15f;
+    public float gravity = -9.81f;
+
     private CharacterController m_CharacterController;
     private PlayerInput m_PlayerInput;
     private ThirdPersonCamera m_CameraController;
+    
     private Vector3 m_PlayerVelocity;
-    private readonly NetworkVariable<Vector3> m_NetworkPosition = new NetworkVariable<Vector3>(
-        Vector3.zero, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private readonly NetworkVariable<Quaternion> m_NetworkRotation = new NetworkVariable<Quaternion>(
-        Quaternion.identity, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    private Vector3 m_ServerMoveDirection;
+    private bool m_IsGrounded;
+
     public override void OnNetworkSpawn()
     {
         m_CharacterController = GetComponent<CharacterController>();
         m_PlayerInput = GetComponent<PlayerInput>();
         m_CameraController = GetComponent<ThirdPersonCamera>();
-        if (IsServer)
+        
+        // КРИТИЧНО: Тільки власник (Local Player) керує CharacterController
+        // Клони (інші гравці) керуються через ClientNetworkTransform
+        if (m_CharacterController != null)
         {
-            m_NetworkPosition.Value = transform.position;
-            m_NetworkRotation.Value = transform.rotation;
+            m_CharacterController.enabled = IsOwner;
         }
-        m_CharacterController.enabled = IsServer;
+        else
+        {
+            Debug.LogError("CharacterController is missing on Player!");
+        }
+        
         gameObject.layer = LayerMask.NameToLayer("Player");
     }
 
     private void Update()
     {
-        if (IsOwner)
-        {
-            ClientInput();
-        }
-        if (!IsServer || !IsHost)
-        {
-            InterpolateToNetworkState();
-        }
+        // Якщо це не наш гравець - нічого не робимо (позицію оновить ClientNetworkTransform автоматично)
+        if (!IsOwner) return;
+        
+        HandleMovement();
     }
-    private void FixedUpdate()
+
+    private void HandleMovement()
     {
-        if (IsServer)
+        if (m_CharacterController == null) return;
+
+        m_IsGrounded = m_CharacterController.isGrounded;
+
+        // Гравітація (скидання швидкості на землі)
+        if (m_IsGrounded && m_PlayerVelocity.y < 0)
         {
-            ServerMove();
+            m_PlayerVelocity.y = -2f;
         }
-    }
-    private void ClientInput()
-    {
-        Vector2 input = m_PlayerInput.MoveInput;
+
+        // Отримання вводу
+        Vector2 input = m_PlayerInput != null ? m_PlayerInput.MoveInput : Vector2.zero;
         Vector3 moveDirection = Vector3.zero;
+
+        // Розрахунок напрямку відносно камери
         if (input.magnitude > 0.1f)
         {
-            Vector3 cameraForward = m_CameraController != null ? m_CameraController.GetCameraForward() : Vector3.forward;
-            Vector3 cameraRight = m_CameraController != null ? m_CameraController.GetCameraRight() : Vector3.right;
+            // Намагаємось знайти камеру
+            Vector3 cameraForward = Vector3.forward;
+            Vector3 cameraRight = Vector3.right;
+
+            if (m_CameraController != null) 
+            {
+                cameraForward = m_CameraController.GetCameraForward();
+                cameraRight = m_CameraController.GetCameraRight();
+            }
+            else if (Camera.main != null)
+            {
+                cameraForward = Camera.main.transform.forward;
+                cameraRight = Camera.main.transform.right;
+            }
+
+            // Ігноруємо нахил камери вверх/вниз для руху по площині
+            cameraForward.y = 0;
+            cameraRight.y = 0;
+            cameraForward.Normalize();
+            cameraRight.Normalize();
+
             moveDirection = (cameraForward * input.y + cameraRight * input.x).normalized;
         }
-        SubmitMovementServerRpc(moveDirection);
-    }
-    private void InterpolateToNetworkState()
-    {
-        transform.position = Vector3.Lerp(transform.position, m_NetworkPosition.Value, interpolationSpeed * Time.deltaTime);
-        transform.rotation = Quaternion.Slerp(transform.rotation, m_NetworkRotation.Value, interpolationSpeed * Time.deltaTime);
-    }
-    [ServerRpc]
-    private void SubmitMovementServerRpc(Vector3 moveDirection)
-    {
-        m_ServerMoveDirection = moveDirection;
-    }
-    private void ServerMove()
-    {
-        if (m_CharacterController.isGrounded && m_PlayerVelocity.y < 0)
+
+        // Рух
+        Vector3 velocity = moveDirection * moveSpeed;
+        
+        // Застосування гравітації
+        m_PlayerVelocity.y += gravity * Time.deltaTime;
+        
+        // Фактичний рух контролера
+        m_CharacterController.Move((velocity + m_PlayerVelocity) * Time.deltaTime);
+
+        // Поворот персонажа в сторону руху
+        if (moveDirection.magnitude > 0.1f)
         {
-            m_PlayerVelocity.y = -1f;
+            Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
         }
-
-        Vector3 horizontalVelocity = m_ServerMoveDirection * moveSpeed;
-
-        m_PlayerVelocity.y += Physics.gravity.y * Time.fixedDeltaTime;
-
-        Vector3 finalVelocity = horizontalVelocity + new Vector3(0, m_PlayerVelocity.y, 0);
-
-        m_CharacterController.Move(finalVelocity * Time.fixedDeltaTime);
-
-        if (m_ServerMoveDirection.magnitude > 0.1f)
-        {
-            Quaternion targetRotation = Quaternion.LookRotation(m_ServerMoveDirection);
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime);
-        }
-
-        m_NetworkPosition.Value = transform.position;
-        m_NetworkRotation.Value = transform.rotation;
     }
 }

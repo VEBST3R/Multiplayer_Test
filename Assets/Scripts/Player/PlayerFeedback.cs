@@ -47,15 +47,7 @@ public class PlayerFeedback : NetworkBehaviour
     {
         yield return new WaitForSeconds(0.1f);
     }
-    private void OnGUI()
-    {
-        if (!IsOwner || m_PlayerHealth == null) return;
-        GUI.Label(new Rect(10, 10, 200, 30), $"Health: {m_PlayerHealth.CurrentHealth}/{m_PlayerHealth.maxHealth}");
-        if (!m_PlayerHealth.IsAlive)
-        {
-            GUI.Label(new Rect(10, 40, 200, 30), "DEAD - Respawning...");
-        }
-    }
+
     public override void OnNetworkDespawn()
     {
         if (m_PlayerHealth != null)
